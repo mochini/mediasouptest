@@ -11,27 +11,16 @@ class WebRTC extends React.Component {
   closed = false
   consumers = []
   device = null
-  mic = null
+  micProducer = null
   protoo = null
   recvTransport = null
   sendTransport = null
-  webcam = null
-
-  _handleProtooClose = this._handleProtooClose.bind(this)
-  _handleProtooDisconnected = this._handleProtooDisconnected.bind(this)
-  _handleProtooFailed = this._handleProtooFailed.bind(this)
-  _handleMicTransportClose = this._handleMicTransportClose.bind(this)
-  _handleMicTrackEnded = this._handleMicTrackEnded.bind(this)
-  _handleProtooNotification = this._handleProtooNotification.bind(this)
-  _handleProtooOpen = this._handleProtooOpen.bind(this)
-  _handleProtooRequest = this._handleProtooRequest.bind(this)
-  _handleRecvTransportConnect = this._handleRecvTransportConnect.bind(this)
-  _handleSendTransportConnect = this._handleSendTransportConnect.bind(this)
-  _handleSendTransportConnectionStateChange = this._handleSendTransportConnectionStateChange.bind(this)
-  _handleSendTransportProduce = this._handleSendTransportProduce.bind(this)
-  _handleSendTransportProduceData = this._handleSendTransportProduceData.bind(this)
-  _handleWebcamTransportClose = this._handleWebcamTransportClose.bind(this)
-  _handleWebcamTrackEnded = this._handleWebcamTrackEnded.bind(this)
+  webcam = {
+		device: null,
+		resolution: 'hd'
+	}
+  webcamProducer = null
+  webcams = {}
 
   state = {
     consumers: [],
@@ -70,13 +59,32 @@ class WebRTC extends React.Component {
     const peerId = _.random(100000000, 999999999).toString(36)
     const transport = new protooClient.WebSocketTransport(`ws://localhost:3001?roomId=${roomId}&peerId=${peerId}`)
     const protoo = new protooClient.Peer(transport)
-    protoo.on('close', this._handleProtooClose)
-    protoo.on('disconnected', this._handleProtooDisconnected)
-    protoo.on('failed', this._handleProtooFailed)
-    protoo.on('notification', this._handleProtooNotification)
-    protoo.on('open', this._handleProtooOpen)
-    protoo.on('request', this._handleProtooRequest)
+    protoo.on('close', this._handleProtooClose.bind(this))
+    protoo.on('disconnected', this._handleProtooDisconnected.bind(this))
+    protoo.on('failed', this._handleProtooFailed.bind(this))
+    protoo.on('notification', this._handleProtooNotification.bind(this))
+    protoo.on('open', this._handleProtooOpen.bind(this))
+    protoo.on('request', this._handleProtooRequest.bind(this))
     return protoo
+  }
+
+  async _getRecvTransport() {
+    const transport = await this.protoo.request('createWebRtcTransport', {
+      forceTcp: false,
+      producing: false,
+      consuming: true,
+      sctpCapabilities: this.device.sctpCapabilities
+    })
+    const recvTransport = await this.device.createRecvTransport({
+      id: transport.id,
+      iceParameters: transport.iceParameters,
+      iceCandidates: transport.iceCandidates,
+      dtlsParameters: transport.dtlsParameters,
+      sctpParameters: transport.sctpParameters,
+      iceServers: []
+    })
+    recvTransport.on('connect', this._handleRecvTransportConnect.bind(this))
+    return recvTransport
   }
 
   async _getSendTransport() {
@@ -99,30 +107,11 @@ class WebRTC extends React.Component {
         ]
       }
     })
-    sendTransport.on('connect', this._handleSendTransportConnect)
-    sendTransport.on('connectionstatechange', this._handleSendTransportConnectionStateChange)
-    sendTransport.on('produce', this._handleSendTransportProduce)
-    sendTransport.on('producedata', this._handleSendTransportProduceData)
+    sendTransport.on('connect', this._handleSendTransportConnect.bind(this))
+    sendTransport.on('connectionstatechange', this._handleSendTransportConnectionStateChange.bind(this))
+    sendTransport.on('produce', this._handleSendTransportProduce.bind(this))
+    sendTransport.on('producedata', this._handleSendTransportProduceData.bind(this))
     return sendTransport
-  }
-
-  async _getRecvTransport() {
-    const transport = await this.protoo.request('createWebRtcTransport', {
-      forceTcp: false,
-      producing: false,
-      consuming: true,
-      sctpCapabilities: this.device.sctpCapabilities
-    })
-    const recvTransport = await this.device.createRecvTransport({
-      id: transport.id,
-      iceParameters: transport.iceParameters,
-      iceCandidates: transport.iceCandidates,
-      dtlsParameters: transport.dtlsParameters,
-      sctpParameters: transport.sctpParameters,
-      iceServers: []
-    })
-    recvTransport.on('connect', this._handleRecvTransportConnect)
-    return recvTransport
   }
 
   _handleProtooClose() {
@@ -348,39 +337,57 @@ class WebRTC extends React.Component {
   }
 
   async _handleMicDisableMic() {
-    if(!this.mic)
-    this.mic.close()
+    if(!this.micProducer)
+    this.micProducer.close()
     await this.protoo.request('closeProducer', {
-      producerId: this.mic.id
+      producerId: this.micProducer.id
     })
-    this.mic = null
+    this.micProducer = null
   }
 
   async _handleMicEnableMic() {
-    if(this.mic) return
+    if(this.micProducer) return
     if(!this.device.canProduce('audio')) return
     const stream = await this._getAudioStream()
     const track = stream.getAudioTracks()[0]
     this.setState({
       audioTrack: track
     })
-    this.mic = await this.sendTransport.produce({
+    this.micProducer = await this.sendTransport.produce({
 			track,
 			codecOptions: {
 				opusStereo: true,
 				opusDtx: true
 			}
 		})
-    this.mic.on('transportclose', this._handleMicTransportClose)
-    this.mic.on('trackended', this._handleMicTrackEnded)
+    this.micProducer.on('transportclose', this._handleMicTransportClose.bind(this))
+    this.micProducer.on('trackended', this._handleMicTrackEnded.bind(this))
+  }
+
+  async _handleMicMuteMic() {
+    console.debug('muteMic()')
+		this.micProducer.pause()
+    await this._protoo.request('pauseProducer', {
+      producerId: this.micProducer.id
+    })
+    // store.dispatch(stateActions.setProducerPaused(this._micProducer.id));
   }
 
   _handleMicTransportClose() {
-    this.mic = null
+    this.micProducer = null
   }
 
   async _handleMicTrackEnded() {
     await this._handleMicDisableMic()
+  }
+
+  async _handleMicUnmuteMic() {
+    console.debug('unmuteMic()')
+		this.micProducer.resume()
+    await this._protoo.request('resumeProducer', {
+      producerId: this.micProducer.id
+    })
+    // store.dispatch(stateActions.setProducerResumed(this._micProducer.id));
   }
 
   /// webcam
@@ -403,35 +410,112 @@ class WebRTC extends React.Component {
     }
   }
 
-  async _handleWebcamDisableWebcam() {
-    if(!this.webcam)
-    this.webcam.close()
-    await this.protoo.request('closeProducer', {
-      producerId: this.webcam.id
+  async _handleWebcamChangeWebcam() {
+    console.debug('changeWebcam()')
+		// store.dispatch(stateActions.setWebcamInProgress(true));
+		await this._updateWebcams()
+		const array = Array.from(this.webcamProducer.keys())
+		const deviceId = this.webcam.device ? this.webcam.device.deviceId : undefined;
+		let idx = array.indexOf(deviceId)
+    idx = idx < array.length - 1 ? idx + 1 : 0
+		this.webcam.device = this._webcams.get(array[idx])
+		console.debug('changeWebcam() | new selected webcam [device:%o]', this.webcam.device)
+		this.webcam.resolution = 'hd'
+		if(!this.webcam.device) throw new Error('no webcam devices')
+		this.webcamProducer.track.stop()
+		console.debug('changeWebcam() | calling getUserMedia()');
+		const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId : {
+          exact: this.webcam.device.deviceId
+        },
+        ...VIDEO_CONSTRAINS[this.webcam.resolution]
+      }
     })
-    this.webcam = null
+		const track = stream.getVideoTracks()[0]
+		await this.webcamProducer.replaceTrack({ track })
+		// store.dispatch(stateActions.setProducerTrack(this._webcamProducer.id, track))
+		// store.dispatch(stateActions.setWebcamInProgress(false))
+	}
+
+  async _handleWebcamChangeWebcamResolution() {
+		console.debug('changeWebcamResolution()')
+		// store.dispatch(stateActions.setWebcamInProgress(true))
+    if(this.webcam.resolution === 'qvga') {
+      this.webcam.resolution === 'vga'
+    } else if(this.webcam.resolution === 'hd') {
+      this.webcam.resolution === 'qvga'
+    } else {
+      this.webcam.resolution === 'hd'
+    }
+		console.debug('changeWebcamResolution() | calling getUserMedia()');
+		const stream = await navigator.mediaDevices.getUserMedia({
+			video : {
+				deviceId : {
+          exact: this.webcam.device.deviceId
+        },
+				...VIDEO_CONSTRAINS[this.webcam.resolution]
+			}
+		})
+		const track = stream.getVideoTracks()[0]
+		await this.webcamProducer.replaceTrack({ track });
+		// store.dispatch(stateActions.setProducerTrack(this._webcamProducer.id, track));
+		// store.dispatch(stateActions.setWebcamInProgress(false));
+	}
+
+  async _handleWebcamDisableWebcam() {
+    if(!this.webcamProducer)
+    this.webcamProducer.close()
+    await this.protoo.request('closeProducer', {
+      producerId: this.webcamProducer.id
+    })
+    this.webcamProducer = null
   }
 
   async _handleWebcamEnableWebcam() {
-    if(this.webcam) return
-    if(!this.device.canProduce('video')) return
+    console.debug('enableWebcam()')
+    if(this.webcamProducer) return
+    if(this.shareProducer) await this._handleShareDisableShare()
+    if(!this.device.canProduce('video')) {
+      console.error('enableWebcam() | cannot produce video');
+      return
+    }
     const stream = await this._getVideoStream()
     const track = stream.getVideoTracks()[0]
     this.setState({
       videoTrack: track
     })
-    this.webcam = await this.sendTransport.produce({ track })
-    this.mic.on('transportclose', this._handleWebcamTransportClose)
-    this.mic.on('trackended', this._handleWebcamTrackEnded)
+    this.webcamProducer = await this.sendTransport.produce({ track })
+    this.micProducer.on('transportclose', this._handleWebcamTransportClose.bind(this))
+    this.micProducer.on('trackended', this._handleWebcamTrackEnded.bind(this))
   }
 
   _handleWebcamTransportClose() {
-    this.webcam = null
+    this.webcamProducer = null
   }
 
   async _handleWebcamTrackEnded() {
     await this._handleWebcamDisableWebcam()
   }
+
+  async _handleWebcamUpdateWebcams() {
+    console.debug('_updateWebcams()')
+		this.webcams = {}
+		console.debug('_updateWebcams() | calling enumerateDevices()')
+		const devices = await navigator.mediaDevices.enumerateDevices()
+    devices.map(device => {
+      if(device.kind === 'videoinput'){
+        this.webcams[device.deviceId] = device
+      }
+    })
+		const array = Object.values(this.webcams)
+		const len = array.length
+		const currentWebcamId = this.webcam.device ? this.webcam.device.deviceId : undefined
+		console.debug('_updateWebcams() [webcams:%o]', array)
+		if (len === 0) this.webcam.device = null
+		if(!this._webcams.has(currentWebcamId)) this.webcam.device = array[0]
+		// store.dispatch( stateActions.setCanChangeWebcam(this._webcams.size > 1))
+	}
 
   /// recvTransport
 
