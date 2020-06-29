@@ -15,6 +15,7 @@ class WebRTC extends React.Component {
   protoo = null
   recvTransport = null
   sendTransport = null
+  shareProducer = null
   webcam = {
 		device: null,
 		resolution: 'hd'
@@ -390,6 +391,96 @@ class WebRTC extends React.Component {
     // store.dispatch(stateActions.setProducerResumed(this._micProducer.id));
   }
 
+  /// share
+
+  _handleShareDisableShare() {
+    console.debug('disableShare()');
+		if(!this.shareProducer) return
+		this.shareProducer.close()
+		// store.dispatch(stateActions.removeProducer(this._shareProducer.id));
+		await this.protoo.request('closeProducer', {
+      producerId: this._shareProducer.id
+    })
+		this.shareProducer = null
+  }
+
+  _handleShareEnableShare() {
+    console.debug('enableShare()')
+		if(this.shareProducer) return
+    if(this._webcamProducer) await this._handleWebcamDisableWebcam()
+		if (!this.device.canProduce('video')) {
+			console.error('enableShare() | cannot produce video')
+			return
+		}
+		// store.dispatch(stateActions.setShareInProgress(true));
+		console.debug('enableShare() | calling getUserMedia()');
+		const stream = await navigator.mediaDevices.getDisplayMedia({
+			audio: false,
+			video: {
+				displaySurface: 'monitor',
+				logicalSurface: true,
+				cursor: true,
+				width: { max: 1920 },
+				height: { max: 1080 },
+				frameRate: { max: 30 }
+			}
+		})
+		if(!stream) {
+			// store.dispatch(stateActions.setShareInProgress(true))
+			return
+		}
+		const track = stream.getVideoTracks()[0]
+		let encodings
+		const codecOptions = {
+			videoGoogleStartBitrate: 1000
+		}
+		const codec = this.device.rtpCapabilities.codecs.find(c => {
+      return c.mimeType.toLowerCase() === 'video/vp9'
+    })
+		if(!codec) {
+			throw new Error('desired VP9 codec+configuration is not supported');
+		}
+		const firstVideoCodec = this.device.rtpCapabilities.codecs.find((c) => {
+      return c.kind === 'video'
+    })
+		if (codec || firstVideoCodec.mimeType.toLowerCase() === 'video/vp9') {
+			encodings = SCREEN_SHARING_SVC_ENCODINGS
+		} else {
+			encodings = SCREEN_SHARING_SIMULCAST_ENCODINGS.map(encoding => ({
+        ...encoding,
+        dtx: true
+      })
+		}
+		this.shareProducer = await this.sendTransport.produce({
+			track,
+			encodings,
+			codecOptions,
+			codec,
+			appData: {
+				share: true
+			}
+		})
+		// store.dispatch(stateActions.addProducer({
+		// 	id: this._shareProducer.id,
+		// 	type: 'share',
+		// 	paused: this._shareProducer.paused,
+		// 	track: this._shareProducer.track,
+		// 	rtpParameters: this._shareProducer.rtpParameters,
+		// 	codec: this._shareProducer.rtpParameters.codecs[0].mimeType.split('/')[1]
+		// }))
+		this.shareProducer.on('transportclose', () => {
+			this.shareProducer = null
+		})
+		this.shareProducer.on('trackended', () => {
+			store.dispatch(requestActions.notify({
+				type: 'error',
+				text: 'Share disconnected!'
+			}))
+			this.disableShare().catch(() => {})
+		})
+		// store.dispatch(stateActions.setShareInProgress(false));
+  }
+
   /// webcam
 
   async _getVideoStream() {
@@ -415,9 +506,9 @@ class WebRTC extends React.Component {
 		// store.dispatch(stateActions.setWebcamInProgress(true));
 		await this._updateWebcams()
 		const array = Array.from(this.webcamProducer.keys())
-		const deviceId = this.webcam.device ? this.webcam.device.deviceId : undefined;
+		const deviceId = this.webcam.device ? this.webcam.device.deviceId: undefined;
 		let idx = array.indexOf(deviceId)
-    idx = idx < array.length - 1 ? idx + 1 : 0
+    idx = idx < array.length - 1 ? idx + 1: 0
 		this.webcam.device = this._webcams.get(array[idx])
 		console.debug('changeWebcam() | new selected webcam [device:%o]', this.webcam.device)
 		this.webcam.resolution = 'hd'
@@ -426,7 +517,7 @@ class WebRTC extends React.Component {
 		console.debug('changeWebcam() | calling getUserMedia()');
 		const stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        deviceId : {
+        deviceId: {
           exact: this.webcam.device.deviceId
         },
         ...VIDEO_CONSTRAINS[this.webcam.resolution]
@@ -450,8 +541,8 @@ class WebRTC extends React.Component {
     }
 		console.debug('changeWebcamResolution() | calling getUserMedia()');
 		const stream = await navigator.mediaDevices.getUserMedia({
-			video : {
-				deviceId : {
+			video: {
+				deviceId: {
           exact: this.webcam.device.deviceId
         },
 				...VIDEO_CONSTRAINS[this.webcam.resolution]
@@ -510,7 +601,7 @@ class WebRTC extends React.Component {
     })
 		const array = Object.values(this.webcams)
 		const len = array.length
-		const currentWebcamId = this.webcam.device ? this.webcam.device.deviceId : undefined
+		const currentWebcamId = this.webcam.device ? this.webcam.device.deviceId: undefined
 		console.debug('_updateWebcams() [webcams:%o]', array)
 		if (len === 0) this.webcam.device = null
 		if(!this._webcams.has(currentWebcamId)) this.webcam.device = array[0]
