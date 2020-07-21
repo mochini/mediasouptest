@@ -43,7 +43,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "lodash": "^4.17.15",
+    "lodash": "^4.17.19",
     "mediasoup": "^3.6.8",
     "mediasoup-client": "^3.6.10",
     "mediasoup-client-aiortc": "^3.6.3",
